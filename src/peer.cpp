@@ -2,31 +2,14 @@
 #include <pthread.h>
 #include <cstdio>
 #include <unistd.h>
-
 #include <iostream>
 #include <vector>
 #include <fstream>
-
+#include <cstring>   // for strcpy, strcmp, memcmp, memcpy
 #include "struct.h"
 #include "peer.h"
 
 using namespace std;
-
-void PeerManager::DEBUG_PRINT() {
-    cout << "Rank: " << rank << endl;
-    cout << "Nr files: " << nr_files << endl;
-    for (int i = 0; i < nr_files; i++) {
-        cout << "File " << i << ": " << peer_files[i].file.filename << endl;
-        cout << "Nr owned chunks: " << peer_files[i].nr_owned_chunks << endl;
-        for (int j = 0; j < peer_files[i].nr_owned_chunks; j++) {
-            cout << "Chunk " << j << ": ";
-            for (int k = 0; k < HASH_SIZE; k++) {
-                cout << peer_files[i].file.identifiers[j].hash[k];
-            }
-            cout << endl;
-        }
-    }
-}
 
 PeerManager::PeerManager(int rank, int numtasks) : rank(rank), numtasks(numtasks) {
     nr_owned_files = 0;
@@ -34,22 +17,21 @@ PeerManager::PeerManager(int rank, int numtasks) : rank(rank), numtasks(numtasks
     read_input_file();
 }
 
+// read input file
 void PeerManager::read_input_file() {
-    // deschidem fisierul de input
     char input_file_name[MAX_FILENAME];
     sprintf(input_file_name, "in%d.txt", rank);
 
     ifstream fin(input_file_name);
     if (!fin.is_open()) {
-        cerr << "Error opening input file for rank: " << rank << endl;
+        cerr << "[Peer " << rank << "] Error opening input file: " << input_file_name << endl;
         exit(-1);
     }
     
-    // citim datele din fisier legate de ce fisiere detine
+    // how many files do we OWN
     fin >> nr_owned_files;
     for (int i = 0; i < nr_owned_files; i++) {
         file_data& file = peer_files[i].file;
-    
         fin >> file.filename; 
         fin >> file.nr_total_chunks;
 
@@ -57,56 +39,54 @@ void PeerManager::read_input_file() {
             fin >> file.identifiers[j].hash;
             peer_files[i].has_chunk[j] = true;
         }
-
         peer_files[i].nr_owned_chunks = file.nr_total_chunks;
     }
 
-    // citim datele legate de ce fisiere doreste sa downloadeze
+    // how many files do we WANT to download
     int nr_files_to_download;
     fin >> nr_files_to_download;
     nr_files = nr_files_to_download + nr_owned_files;
 
+    // read the name for each file we want
     for (int i = nr_owned_files; i < nr_files; i++) {
         file_data& file = peer_files[i].file;
-    
-        fin >> file.filename; 
+        fin >> file.filename;
+        // we might not know how many chunks until we get from tracker, or you can store a placeholder
+        // If the input doesn't specify them, set it to 0 or some default
+        file.nr_total_chunks = 0;
 
-        for (int j = 0; j < file.nr_total_chunks; j++) {
+        for (int j = 0; j < MAX_CHUNKS; j++) {
             peer_files[i].has_chunk[j] = false;
         }
-
         peer_files[i].nr_owned_chunks = 0;
     }
 
     fin.close();
 }
 
-// trimitem numarul de fisiere ca sa stie tracker-ul dupa cate fisiere sa astepte
 void PeerManager::send_my_nr_files() {
     MPI_Send(&nr_owned_files, 1, MPI_INT, TRACKER_RANK, MSG_INIT_NR_FILES, MPI_COMM_WORLD);
 }
 
-// trimitem datele (hash-uri, nume fisiere si numari bucati) despre fisierele detinute catre tracker
 void PeerManager::send_own_files_data() {
     for (int i = 0; i < nr_owned_files; i++) {
         file_data* cur_file_p = &(peer_files[i].file);
-        cout << "Sent from " << rank << " file " << cur_file_p->filename << endl;
+        cout << "[Peer " << rank << "] Sending owned file " << cur_file_p->filename << " to tracker.\n";
         MPI_Send(cur_file_p, sizeof(file_data), MPI_BYTE, TRACKER_RANK, MSG_INIT_FILES, MPI_COMM_WORLD);
     }
 }
 
 void PeerManager::save_output_file(int index) {
-    // deschidem fisierul de output
     char output_file_name[MAX_OUTPUT_FILENAME];
     sprintf(output_file_name, "client%d.%s", rank, peer_files[index].file.filename);
 
     ofstream fout(output_file_name);
     if (!fout.is_open()) {
-        cerr << "Error opening output file for rank: " << rank << endl;
+        cerr << "[Peer " << rank << "] Error opening output file: " << output_file_name << endl;
         exit(-1);
     }
 
-    // scriem hash-urile in fisier
+    // write the chunks' hashes in order
     for (int i = 0; i < peer_files[index].nr_owned_chunks; i++) {
         for (int j = 0; j < HASH_SIZE; j++) {
             fout << peer_files[index].file.identifiers[i].hash[j];
@@ -117,47 +97,54 @@ void PeerManager::save_output_file(int index) {
     fout.close();
 }
 
-// cerem update la swarm
+// Ask tracker for an updated swarm for the current file
 void PeerManager::update_swarm() {
     char *filename_p = cur_swarm.file_metadata.filename;
     MPI_Send(filename_p, MAX_FILENAME, MPI_CHAR, TRACKER_RANK, MSG_REQ_UPDATE_SWARM, MPI_COMM_WORLD);
     MPI_Recv(&(cur_swarm.update), sizeof(swarm_update), MPI_BYTE, TRACKER_RANK, MSG_UPDATE_SWARM, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 }
 
-// cerem un chunk de la un peer
+// Request a chunk from a remote peer
 bool PeerManager::request_chunk(int rank_request, int file_index, int chunk_index) {
     chunk_request req;
     chunk_response res;
 
-    // facem request-ul
     req.chunk_index = chunk_index;
     strcpy(req.filename, peer_files[file_index].file.filename);
+
+    // send request
     MPI_Send(&req, sizeof(chunk_request), MPI_BYTE, rank_request, MSG_CHUNK_REQUEST, MPI_COMM_WORLD);
 
-    // primim raspunsul
+    // get response
     MPI_Recv(&res, sizeof(chunk_response), MPI_BYTE, rank_request, MSG_CHUNK_RESPONSE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-    // verificam daca chunk-ul a fost gasit si daca hash-ul corespunde
-    if (res.has_chunk) {
+    // If remote peer doesn't have chunk
+    if (!res.has_chunk) {
         return false;
     }
 
+    // If it has chunk, verify hash
     if (memcmp(res.hash, cur_swarm.file_metadata.identifiers[chunk_index].hash, HASH_SIZE) != 0) {
+        // hash mismatch
         return false;
     }
 
+    // success: copy the chunk's hash
     memcpy(peer_files[file_index].file.identifiers[chunk_index].hash, res.hash, HASH_SIZE);
-    
     return true;
 }
 
+// Respond to a chunk request from any other peer
 void PeerManager::send_chunk() {
+    MPI_Status status;
     chunk_request req;
     chunk_response res;
 
-    MPI_Recv(&req, sizeof(chunk_request), MPI_BYTE, MPI_ANY_SOURCE, MSG_CHUNK_REQUEST, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(&req, sizeof(chunk_request), MPI_BYTE, MPI_ANY_SOURCE, MSG_CHUNK_REQUEST, MPI_COMM_WORLD, &status);
 
-    // cautam fisierul
+    int src_rank = status.MPI_SOURCE;
+    
+    // find local file index
     int file_index = -1;
     for (int i = 0; i < nr_files; i++) {
         if (strcmp(peer_files[i].file.filename, req.filename) == 0) {
@@ -166,117 +153,137 @@ void PeerManager::send_chunk() {
         }
     }
 
-    // daca nu gasim fisierul, trimitem raspuns negativ
+    // if we don't have that file at all
     if (file_index == -1) {
         res.has_chunk = false;
-        MPI_Send(&res, sizeof(chunk_response), MPI_BYTE, req.chunk_index, MSG_CHUNK_RESPONSE, MPI_COMM_WORLD);
+        MPI_Send(&res, sizeof(chunk_response), MPI_BYTE, src_rank, MSG_CHUNK_RESPONSE, MPI_COMM_WORLD);
         return;
     }
 
-    // daca gasim fisierul, trimitem raspuns pozitiv si hash-ul
-    res.has_chunk = true;
-    memcpy(res.hash, peer_files[file_index].file.identifiers[req.chunk_index].hash, HASH_SIZE);
-    MPI_Send(&res, sizeof(chunk_response), MPI_BYTE, req.chunk_index, MSG_CHUNK_RESPONSE, MPI_COMM_WORLD);
+    // if we do have the file, check if we have that chunk
+    if (peer_files[file_index].has_chunk[req.chunk_index]) {
+        res.has_chunk = true;
+        memcpy(res.hash, peer_files[file_index].file.identifiers[req.chunk_index].hash, HASH_SIZE);
+    } else {
+        res.has_chunk = false;
+        memset(res.hash, 0, HASH_SIZE);
+    }
+
+    // send response
+    MPI_Send(&res, sizeof(chunk_response), MPI_BYTE, src_rank, MSG_CHUNK_RESPONSE, MPI_COMM_WORLD);
 }
 
-// descarcam un fisier folosind swarm-ul
+// Download one file using the current swarm data
 void PeerManager::download_file_using_swarm(int file_index) {
+    // local references
     peer_file_data& cur_peer_file = peer_files[file_index];
-    int& nr_owned_chunks = cur_peer_file.nr_owned_chunks;
-    int& nr_total_chunks = cur_swarm.file_metadata.nr_total_chunks;
+    // we trust tracker has the correct total
+    int nr_total_chunks = cur_swarm.file_metadata.nr_total_chunks;
+
+    // update local metadata
+    cur_peer_file.file.nr_total_chunks = nr_total_chunks;
+
     int count = 1;
 
-    while (nr_owned_chunks < nr_total_chunks) {
-        if (count % 10 == 0) {
-            update_swarm();
+    // while we don't have all chunks
+    while (cur_peer_file.nr_owned_chunks < nr_total_chunks) {
+        
+        // Let's pick the next missing chunk:
+        int needed_chunk = -1;
+        for (int c = 0; c < nr_total_chunks; c++) {
+            if (!cur_peer_file.has_chunk[c]) {
+                needed_chunk = c;
+                break;
+            }
+        }
+        if (needed_chunk == -1) {
+            // means we somehow have them all
+            break;
         }
 
-        bool found = false;
+        // attempt to get the chunk from seeds first
+        bool gotIt = false;
         int cur_seed = 1;
-        int cur_peer = 1;
-        
-        // cautam un seed care detine chunk-ul
-        while (!found && cur_seed <= MAX_CLIENTS) {
-            if (cur_swarm.update.is_seed[cur_seed]) {
-                found = request_chunk(cur_seed, file_index, nr_owned_chunks);
-                cur_peer_file.has_chunk[nr_owned_chunks] = true;
+        while (!gotIt && cur_seed < MAX_CLIENTS) {
+            if (cur_swarm.update.is_seed[cur_seed] && cur_seed != rank) {
+                gotIt = request_chunk(cur_seed, file_index, needed_chunk);
             }
             cur_seed++;
         }
-
-        // daca n-am gasit un seed, cautam un peer
-        while (!found && cur_peer <= MAX_CLIENTS) {
-            if (cur_swarm.update.is_peer[cur_peer]) {
-                found = request_chunk(cur_peer, file_index, nr_owned_chunks);
-                cur_peer_file.has_chunk[nr_owned_chunks] = true;
+        
+        // if not found from a seed, try from peers
+        int cur_peer = 1;
+        while (!gotIt && cur_peer < MAX_CLIENTS) {
+            if (cur_swarm.update.is_peer[cur_peer] && cur_peer != rank) {
+                gotIt = request_chunk(cur_peer, file_index, needed_chunk);
             }
             cur_peer++;
         }
 
-        nr_owned_chunks++;
+        // if successful, mark the chunk as owned
+        if (gotIt) {
+            cur_peer_file.has_chunk[needed_chunk] = true;
+            cur_peer_file.nr_owned_chunks++;
+        }
+
+        // every 10 chunks, let's update swarm from tracker
+        if ((count % 10) == 0) {
+            update_swarm();
+        }
         count++;
     }
-
-    // acualizam metadatele fisierului descarcat
-    cur_peer_file.nr_owned_chunks = nr_total_chunks;
-    cur_peer_file.file.nr_total_chunks = nr_total_chunks;
 }
 
+void PeerManager::DEBUG_PRINT() {
+    cout << "[Peer " << rank << "] nr_files: " << nr_files
+         << " , nr_owned_files: " << nr_owned_files << endl;
+    for (int i = 0; i < nr_files; i++) {
+        cout << "  File #" << i << ": " << peer_files[i].file.filename
+             << " , total_chunks=" << peer_files[i].file.nr_total_chunks
+             << " , owned=" << peer_files[i].nr_owned_chunks << endl;
+    }
+}
+
+// Download thread: wait for tracker READY, then request swarms, download, etc.
 void* download_thread_func(void* arg) {
     PeerManager* pmanager = static_cast<PeerManager*>(arg);
     MPI_Status status;
 
-    // Asteptam semnal de la tracker ca putem incepe download-urile
+    // Wait for tracker to say "start"
     MPI_Recv(nullptr, 0, MPI_CHAR, TRACKER_RANK, MSG_TRACKER_READY, MPI_COMM_WORLD, &status);
-    cout << "[Peer " << pmanager->rank << "] Received tracker ACK. Starting downloads.\n";
-    cout << "[Peer " << pmanager->rank << "] Nr files to download: " << pmanager->nr_files - pmanager->nr_owned_files << endl;
-    cout << "[Peer " << pmanager->rank << "] Nr owned files: " << pmanager->nr_owned_files << endl;
+    cout << "[Peer " << pmanager->rank << "] Received tracker READY. Starting downloads.\n";
 
-    // Pentru fiecare fisier pe care vrem sa-l downloadam cerem swarm-ul
+    // For each file we want to download
     for (int i = pmanager->nr_owned_files; i < pmanager->nr_files; i++) {
-
-        if (pmanager->rank != 1) {
-            break;
-        }
-
         file_data& file = pmanager->peer_files[i].file;
 
-        // cere swarm-ul si il salvam
+        // ask tracker for swarm
         MPI_Send(file.filename, MAX_FILENAME, MPI_CHAR, TRACKER_RANK, MSG_REQ_FULL_SWARM, MPI_COMM_WORLD);
-        MPI_Recv(&(pmanager->cur_swarm), sizeof(swarm_data), MPI_BYTE, TRACKER_RANK, MSG_SWARM_DATA, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&(pmanager->cur_swarm), sizeof(swarm_data), MPI_BYTE,
+                 TRACKER_RANK, MSG_SWARM_DATA, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-        // printam swarm-ul
-        swarm_data& swarm_file = pmanager->cur_swarm;
-        cout << "\n\n[&&Peer " << pmanager->rank << "] Swarm for file " << swarm_file.file_metadata.filename << endl;
-        for (int j = 0; j < swarm_file.file_metadata.nr_total_chunks; j++) {
-            for (int k = 0; k < HASH_SIZE; k++) {
-                cout << swarm_file.file_metadata.identifiers[j].hash[k];
-            }
-            cout << endl;
+        // Now let's actually download
+        // printam doar daca e peer-ul cu rankul 3
+        if (pmanager->rank == 3) {
+            cout << "[Peer " << pmanager->rank << "] Downloading file: " << file.filename << endl;
         }
-        for (int j = 1; j <= MAX_CLIENTS; j++) {
-            if (swarm_file.update.is_seed[j]) {
-                cout << "Seed: " << j << endl;
-            }
-            if (swarm_file.update.is_peer[j]) {
-                cout << "Peer: " << j << endl;
-            }
-        }
-
         pmanager->download_file_using_swarm(i);
 
-        // salvam fisierul notifiam tracker-ul ca am terminat de downloadat fisierul
+        // Done with this file: save output, notify tracker
         pmanager->save_output_file(i);
         MPI_Send(file.filename, MAX_FILENAME, MPI_CHAR, TRACKER_RANK, MSG_FILE_DONE, MPI_COMM_WORLD);
+
+        cout << "[Peer " << pmanager->rank << "] Downloaded file: " << file.filename << endl
+             << " - Owned chunks: " << pmanager->peer_files[i].nr_owned_chunks << endl;
     }
 
-    // Daca am terminat de downloadat toate fisierele, notificam tracker-ul
+    // If we finished all desired files, notify tracker
     MPI_Send(nullptr, 0, MPI_CHAR, TRACKER_RANK, MSG_ALL_DONE, MPI_COMM_WORLD);
 
     return nullptr;
 }
 
-
+// Upload thread: handle chunk requests until we get TRACKER_STOP
 void* upload_thread_func(void* arg) {
     PeerManager* pmanager = static_cast<PeerManager*>(arg);
 
@@ -288,57 +295,70 @@ void* upload_thread_func(void* arg) {
         int source = status.MPI_SOURCE;
         int tag = status.MPI_TAG;
 
-        // cazul cand un peer ne cere un chunk
         if (tag == MSG_CHUNK_REQUEST) {
+            // serve chunk request
             pmanager->send_chunk();
         }
-        // cazul cand tracker-ul ne spune ca s-a terminat
-        if (tag == MSG_TRACKER_STOP) {
+        else if (tag == MSG_TRACKER_STOP) {
+            // final stop
             MPI_Recv(nullptr, 0, MPI_CHAR, source, MSG_TRACKER_STOP, MPI_COMM_WORLD, &status);
+            // cout << "[Peer " << pmanager->rank << "] Received stop signal from tracker.\n";
             finished = true;
         }
+        else {
+            // unknown or unhandled message → consume it
+            MPI_Recv(nullptr, 0, MPI_CHAR, source, tag, MPI_COMM_WORLD, &status);
+            cerr << "[Peer " << pmanager->rank << "] Upload thread got unknown tag " 
+                 << tag << " from rank " << source << endl;
+        }
     }
-
     return nullptr;
 }
 
+// Peer main function
 void peer(int numtasks, int rank) {
     pthread_t download_thread;
     pthread_t upload_thread;
-    void* status;
+    void* statusPtr;
 
     PeerManager pmanager(rank, numtasks);
+    // spacing out prints
     sleep(rank * 0.1);
 
-    // trimitem numarul de fisiere ca sa stie tracker-ul dupa cate fisiere sa astepte
+    // Let tracker know how many files we own
     pmanager.send_my_nr_files();
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // trimitem datele despre fisierele detinute
+    // Send file data for owned files
     pmanager.send_own_files_data();
     MPI_Barrier(MPI_COMM_WORLD);
 
+    // Launch threads
     int r = pthread_create(&download_thread, nullptr, download_thread_func, (void*)&pmanager);
     if (r) {
-        cerr << "Error creating download thread" << endl;
+        cerr << "[Peer " << rank << "] Error creating download thread.\n";
         exit(-1);
     }
 
     r = pthread_create(&upload_thread, nullptr, upload_thread_func, (void*)&pmanager);
     if (r) {
-        cerr << "Error creating upload thread" << endl;
+        cerr << "[Peer " << rank << "] Error creating upload thread.\n";
         exit(-1);
     }
 
-    r = pthread_join(download_thread, &status);
+    // join threads
+    r = pthread_join(download_thread, &statusPtr);
     if (r) {
-        cerr << "Error joining download thread" << endl;
+        cerr << "[Peer " << rank << "] Error joining download thread.\n";
         exit(-1);
     }
 
-    r = pthread_join(upload_thread, &status);
+    r = pthread_join(upload_thread, &statusPtr);
     if (r) {
-        cerr << "Error joining upload thread" << endl;
+        cerr << "[Peer " << rank << "] Error joining upload thread.\n";
         exit(-1);
     }
+
+    cout << "[Peer " << rank << "] All threads joined, shutting down.\n";
 }
+
