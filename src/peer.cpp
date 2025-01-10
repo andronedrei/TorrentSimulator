@@ -65,14 +65,14 @@ void PeerManager::send_my_nr_files() {
 void PeerManager::send_own_files_data() {
     for (int i = 0; i < nr_owned_files; i++) {
         file_data* file = &(files[i]);
-        cout << "[Peer " << rank << "] Sending owned file " << file->filename << " to tracker.\n";
+        // cout << "[Peer " << rank << "] Sending owned file " << file->filename << " to tracker.\n";
         MPI_Send(file, sizeof(file_data), MPI_BYTE, TRACKER_RANK, MSG_INIT_FILES, MPI_COMM_WORLD);
     }
 }
 
 void PeerManager::save_output_file(int index) {
     char output_file_name[MAX_OUTPUT_FILENAME];
-    sprintf(output_file_name, "client%d.%s.tmp", rank, files[index].filename);
+    sprintf(output_file_name, "client%d.%s", rank, files[index].filename);
 
     ofstream fout(output_file_name);
     if (!fout.is_open()) {
@@ -216,7 +216,7 @@ void* download_thread_func(void* arg) {
 
     // astptam semnal de la tracker
     MPI_Recv(nullptr, 0, MPI_CHAR, TRACKER_RANK, MSG_TRACKER_READY, MPI_COMM_WORLD, &status);
-    cout << "[Peer " << pm->rank << "] Received tracker READY. Starting downloads. (nr_owed_files=" << pm->nr_owned_files << ", nr_files=" << pm->nr_files << ")\n";
+    // cout << "[Peer " << pm->rank << "] Received tracker READY. Starting downloads. (nr_owed_files=" << pm->nr_owned_files << ", nr_files=" << pm->nr_files << ")\n";
 
     // pt fiecare fisier dorit, cerem swarm-ul si descarcam
     for (int i = pm->nr_owned_files; i < pm->nr_files; i++) {
@@ -234,13 +234,13 @@ void* download_thread_func(void* arg) {
         pm->nr_owned_files++;
         MPI_Send(file.filename, MAX_FILENAME, MPI_CHAR, TRACKER_RANK, MSG_FILE_DONE, MPI_COMM_WORLD);
 
-        cout << "[Peer " << pm->rank << "] Downloaded file: " << file.filename << " - Owned chunks: " << pm->nr_owned_chunks[i] << endl;
+        // cout << "[Peer " << pm->rank << "] Downloaded file: " << file.filename << " - Owned chunks: " << pm->nr_owned_chunks[i] << endl;
     }
 
     // am terminat toate fisierele
     MPI_Send(nullptr, 0, MPI_CHAR, TRACKER_RANK, MSG_ALL_DONE, MPI_COMM_WORLD);
 
-    cout << "[Peer " << pm->rank << "] Finished downloading all files.\n";
+    // cout << "[Peer " << pm->rank << "] Finished downloading all files.\n";
 
     return nullptr;
 }
@@ -256,7 +256,7 @@ void* upload_thread_func(void* arg) {
         int source = status.MPI_SOURCE;
         int tag = status.MPI_TAG;
 
-        cout << "[!!! Peer " << pm->rank << "] Probed imessage with tag " << tag << " from " << source << endl;
+        // cout << "[!!! Peer " << pm->rank << "] Probed imessage with tag " << tag << " from " << source << endl;
 
         if (tag == MSG_CHUNK_REQUEST) {
             // cerere de chunk
@@ -265,7 +265,7 @@ void* upload_thread_func(void* arg) {
         if (tag == MSG_TRACKER_STOP) {
             // cerere de stop de la tracker
             MPI_Recv(nullptr, 0, MPI_CHAR, source, MSG_TRACKER_STOP, MPI_COMM_WORLD, &status);
-            cout << "[Peer " << pm->rank << "] Received stop signal from tracker.\n";
+            // cout << "[Peer " << pm->rank << "] Received stop signal from tracker.\n";
             finished = true;
         }
     }
@@ -280,7 +280,7 @@ void peer(int numtasks, int rank) {
 
     PeerManager pm(rank, numtasks);
     // spacing out prints
-    sleep(rank * 0.1);
+    // sleep(rank * 0.1);
 
     // Let tracker know how many files we own
     pm.send_my_nr_files();
@@ -316,5 +316,5 @@ void peer(int numtasks, int rank) {
         exit(-1);
     }
 
-    cout << "[Peer " << rank << "] All threads joined, shutting down.\n";
+    // cout << "[Peer " << rank << "] All threads joined, shutting down.\n";
 } 
