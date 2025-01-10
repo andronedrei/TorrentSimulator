@@ -169,25 +169,31 @@ void PeerManager::download_file_using_swarm(int file_index) {
 
     int count = 1;
     int cur_chk;
+    bool found_chunk = false;
 
     // loop pana cand avem toate chunk-urile
     while (nr_owned_chunks[file_index] < file.nr_total_chunks) {
         cur_chk = nr_owned_chunks[file_index]; // = 0 la inceput
+        found_chunk = false;
 
         // cutam in lista de seederi din swarm
         for (int i = 1; i < numtasks; i++) {
             if (cur_swarm.owners.is_seed[i]) {
                 if (request_chunk(i, file_index, cur_chk)) {
+                    found_chunk = true;
                     break;
                 }
             }
         }
 
         // daca nu am gasit chunk-ul, cautam si in lista de peeri
-        for (int i = 1; i < numtasks; i++) {
-            if (cur_swarm.owners.is_peer[i]) {
-                if (request_chunk(i, file_index, cur_chk)) {
-                    break;
+        if (!found_chunk) {
+            for (int i = 1; i < numtasks; i++) {
+                if (cur_swarm.owners.is_peer[i]) {
+                    if (request_chunk(i, file_index, cur_chk)) {
+                        found_chunk = true;
+                        break;
+                    }
                 }
             }
         }
