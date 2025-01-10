@@ -9,6 +9,7 @@
 
 using namespace std;
 
+// constructor si initializare
 TrackerManager::TrackerManager(int numtasks) : numtasks(numtasks) {
     swarm_data* sw;
     nr_files = 0;
@@ -36,30 +37,6 @@ int TrackerManager::find_file_index(const char* filename) {
     return NOT_FOUND;
 }
 
-void TrackerManager::DEBUG_PRINT() {
-    cout << "[Tracker] We have nr_files = " << nr_files << endl;
-    for (int i = 0; i < nr_files; i++) {
-        file_data& fd = swarms[i].file_metadata;
-        cout << "  File #" << i << ": " << fd.filename 
-             << " with " << fd.nr_total_chunks << " chunks.\n";
-
-        // owners
-        cout << "    Seeds: ";
-        for (int r = 0; r < MAX_CLIENTS; r++) {
-            if (swarms[i].owners.is_seed[r]) {
-                cout << r << " ";
-            }
-        }
-        cout << "\n    Peers: ";
-        for (int r = 0; r < MAX_CLIENTS; r++) {
-            if (swarms[i].owners.is_peer[r]) {
-                cout << r << " ";
-            }
-        }
-        cout << endl;
-    }
-}
-
 void TrackerManager::receive_nr_files_to_process() {
     nr_initial_files = 0;
     for (int rank = 1; rank < numtasks; rank++) {
@@ -69,6 +46,7 @@ void TrackerManager::receive_nr_files_to_process() {
     }
 }
 
+// primeste datele initiale despre fisiere
 void TrackerManager::receive_all_initial_files_data() {
     int found_index, cur_index = 0;
     file_data* cur_file;
@@ -83,11 +61,8 @@ void TrackerManager::receive_all_initial_files_data() {
         MPI_Recv(cur_file, sizeof(file_data), MPI_BYTE, MPI_ANY_SOURCE, MSG_INIT_FILES, MPI_COMM_WORLD, &status);
         sender_rank = status.MPI_SOURCE;
 
-        // cout << "[Tracker] Received file " << cur_file->filename 
-        //      << " from peer " << sender_rank << endl;
-
-        // verificam daca fisierul nu exista si il adaugam in caz afirmativ
-        // daca nu exista mentinem indexul curent pt a fi suprascris data viitoare
+        /* verificam daca fisierul nu exista si il adaugam in caz afirmativ
+        daca nu exista mentinem indexul curent pt a fi suprascris data viitoare */
         found_index = find_file_index(cur_file->filename);
         if (found_index == NOT_FOUND) {
             found_index = cur_index;
@@ -100,9 +75,11 @@ void TrackerManager::receive_all_initial_files_data() {
     }
 }
 
+// semnaleaza clientilor sa inceapa dupa partea de initializare
 void TrackerManager::signal_clients_to_start() {
     for (int rank = 1; rank < numtasks; rank++) {
-        MPI_Send(nullptr, 0, MPI_CHAR, rank, MSG_TRACKER_READY, MPI_COMM_WORLD);
+        MPI_Send(nullptr, 0, MPI_CHAR, rank, MSG_CLIENT_READY_DOWNLOAD, MPI_COMM_WORLD);
+        MPI_Send(nullptr, 0, MPI_CHAR, rank, MSG_CLIENT_READY_UPLOAD, MPI_COMM_WORLD);
     }
 }
 
@@ -174,16 +151,12 @@ void tracker_main_loop(TrackerManager& tm) {
             // un peer a terminat toate descarcarile
             case MSG_ALL_DONE: {
                 MPI_Recv(nullptr, 0, MPI_CHAR, source, MSG_ALL_DONE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                // cout << "[Tracker] Peer " << source << " has finished all downloads ( " << nr_done_clients << " done so far)\n";
                 nr_done_clients++;
 
                 // daca toti au terminat trimitem mesaje de stop
                 if (nr_done_clients == (tm.numtasks - 1)) {
-                    // cout << "[Tracker] All peers done. Stopping...\n";
                     for (int rank = 1; rank < tm.numtasks; rank++) {
                         MPI_Send(nullptr, 0, MPI_CHAR, rank, MSG_TRACKER_STOP, MPI_COMM_WORLD);
-                        // cout << "[Tracker] Sent stop signal to peer " << rank << endl;
-                        // sleep(0.1);
                     }
                     finished = true;
                 }
@@ -202,23 +175,12 @@ void tracker_main_loop(TrackerManager& tm) {
 void tracker(int numtasks, int rank) {
     TrackerManager tm(numtasks);
 
-    // afla cate fisiere vor fi procesate
     tm.receive_nr_files_to_process();
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    // primeste datele initiale despre fisiere
     tm.receive_all_initial_files_data();
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    // optional: a small debug
-    // sleep(1);
-    // tm.DEBUG_PRINT();
 
     // semnaleaza clientilor sa inceapa
     tm.signal_clients_to_start();
 
     // logica principala (swarm-uri si update-uri)
     tracker_main_loop(tm);
-
-    // cout << "[Tracker] Exiting now.\n";
 }

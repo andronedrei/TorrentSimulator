@@ -1,4 +1,4 @@
 #!/bin/bash
 
 make
-mpirun -np 4 ./tema2
+mpirun -np 5 ./tema2

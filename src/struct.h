@@ -11,23 +11,27 @@
 #define MAX_CLIENTS 11
 
 // tag-uri initializare metadate
-#define MSG_INIT_NR_FILES     10000
-#define MSG_INIT_FILES        10001
+#define MSG_INIT_NR_FILES     59000
+#define MSG_INIT_FILES        59001
 
 // tag-uri comunicatie tracker-peer
-#define MSG_TRACKER_READY     20000
-#define MSG_REQ_FULL_SWARM    20001
-#define MSG_REQ_UPDATE_SWARM  20002
-#define MSG_SWARM_DATA        20003
-#define MSG_UPDATE_SWARM      20004
+#define MSG_CLIENT_READY_DOWNLOAD     69000
+#define MSG_CLIENT_READY_UPLOAD       69001
+#define MSG_REQ_FULL_SWARM    69002
+#define MSG_REQ_UPDATE_SWARM  69003
+#define MSG_SWARM_DATA        69004
+#define MSG_UPDATE_SWARM      69005
 
-#define MSG_CHUNK_REQUEST     20005
-#define MSG_CHUNK_RESPONSE    20006
-#define MSG_FILE_DONE         20007
-#define MSG_ALL_DONE          20008
-#define MSG_TRACKER_STOP      20009
+#define MSG_CHUNK_REQUEST     69006
+#define MSG_CHUNK_RESPONSE    69007
+#define MSG_FILE_DONE         69008
+#define MSG_ALL_DONE          69009
+#define MSG_TRACKER_STOP      69010
 
 #define NOT_FOUND -1
+#define FIND_NUM_TRIES 2
+#define BIG_VALUE 1 << 30
+#define PEER_DECISSION_TRESHOLD 1
 
 // structuri date comune folosite in comunicatie
 struct identifier {
@@ -41,8 +45,8 @@ struct file_data {
 };
 
 struct swarm_update {
-    bool is_seed[MAX_CLIENTS]; // if a client fully owns the file
-    bool is_peer[MAX_CLIENTS]; // if a client partially owns the file
+    bool is_seed[MAX_CLIENTS];
+    bool is_peer[MAX_CLIENTS];
 };
 
 struct swarm_data {

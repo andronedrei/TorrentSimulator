@@ -2,7 +2,6 @@
 
 #include "struct.h"
 
-
 class TrackerManager {
 public:
     int numtasks;
@@ -13,7 +12,6 @@ public:
     TrackerManager(int numtasks);
 
     int find_file_index(const char* filename);
-    void DEBUG_PRINT();
 
     // functii de initializare
     void receive_nr_files_to_process();
