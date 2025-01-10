@@ -1,8 +1,6 @@
 #include <mpi.h>
 #include <pthread.h>
 #include <iostream>
-#include <vector>
-#include <cstring>
 #include <unistd.h>
 #include "struct.h"
 #include "tracker.h"

@@ -1,0 +1,37 @@
+Androne Andrei 332CC - Tema 2 APD (C++ dar e mai mult stil C)
+
+Aceasta tema implementeaza functionalitatea BitTorrent, folosind
+framework-ul MPI. Implementarea se alfa in 3 fisiere (+ header-ele aferente)
+denumite peer.cpp, tracker.cpp si tema2.cpp. Anumite structuri de date sunt
+folosite pentru transmiterea datelor de la tracker la peeri, asa ca "struct.h"
+contine definitia acestor structuri comune pentru a le putea trimite prin OpenMpi.
+(ca array-uri de tip "char" de lungime egala cu dimensiunea structurii)
+
+Pentru a fi accesate si interceptate mesajele MPI intr-un mod corect in timpul executiei,
+am folosit o serie de tag-uri (in "struct.h") care identifica actiunile.
+
+Flow-ul program-ului e urmatorul:
+    -> clientii isi citesc fisierele de intrare
+    -> astfel, clientii obtin doua tipuri de fisiere: complete si goale
+    -> transmit catre tracker numarul de fisere complete (ca sa stie de cate ori face recv apoi)
+    -> transmit catre tracker hash-urile si denumirile fisierelor complete,
+astfel ca acesta poate creea un swarm initial
+    -> acum clientii pornesc doua thread-uri: de download si upload
+    -> clientii asteapta un semnal de la tracker sa inceapa treaba
+    -> clientii descarca fisierele unii de la altii (in chunk-uri, descris mai jos*)
+    -> clientii mai pot cere swarm-ul actualizat in timpul operatiilor de descarcare
+    -> cand un client a terminat de descarcat un fisier sau toate fisierele semnaleaza
+tracker-ul (care face update si la swarm cu ocazia asta)
+    -> cand toti clientii au semnalat tracker-ul ca au terminat de descarcat, tracker-ul
+va semnala la randul lui thread-urile de upload (ramase deshise) sa inceteze, oprindu-se si el
+
+Tracker-ul testeaza multitudinea de mesaje primite cu MSI_Probe pentru a sti in functie de tag
+ce ramura a switch-ului cu actiuni foloseste.
+
+*) Pentru a simula descarcareae unui chunk, un peer cere un hash (intr-o implementare
+reala ar primi si continutul) de la un peer sau un seeder si il compara cu propriul
+hash (primit de la tracker) pentru a "confirma" validitatea datelor. Tracker-ul nu retine
+informatii legate de distributia apartenentei chunku-urilor fisierelor in reteaua de clienti,
+el doar are o lista (swarm) cu cine e peer si cine e seeder, actualizata periodic. Un peer 
+isi alege locul de unde descarca un chunk printr-un algoritm euristic, balansand cat de mult
+posibil utilizarea functiei de upload a clientilor.
