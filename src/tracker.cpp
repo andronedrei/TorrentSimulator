@@ -10,16 +10,20 @@
 using namespace std;
 
 TrackerManager::TrackerManager(int numtasks) : numtasks(numtasks) {
+    swarm_data* sw;
     nr_files = 0;
     nr_initial_files = 0;
+
     for (int i = 0; i < MAX_FILES; i++) {
-        // initialize is_seed / is_peer
+        sw = &(swarms[i]);
+    
+        // initial presupunem ca nimeni nu are nimic
         for (int j = 0; j < MAX_CLIENTS; j++) {
-            swarms[i].update.is_seed[j] = false;
-            swarms[i].update.is_peer[j] = false;
+            sw->owners.is_seed[j] = false;
+            sw->owners.is_peer[j] = false;
         }
-        swarms[i].file_metadata.nr_total_chunks = 0;
-        memset(swarms[i].file_metadata.filename, 0, MAX_FILENAME);
+        sw->file_metadata.nr_total_chunks = 0;
+        memset(sw->file_metadata.filename, 0, MAX_FILENAME);
     }
 }
 
@@ -42,13 +46,13 @@ void TrackerManager::DEBUG_PRINT() {
         // owners
         cout << "    Seeds: ";
         for (int r = 0; r < MAX_CLIENTS; r++) {
-            if (swarms[i].update.is_seed[r]) {
+            if (swarms[i].owners.is_seed[r]) {
                 cout << r << " ";
             }
         }
         cout << "\n    Peers: ";
         for (int r = 0; r < MAX_CLIENTS; r++) {
-            if (swarms[i].update.is_peer[r]) {
+            if (swarms[i].owners.is_peer[r]) {
                 cout << r << " ";
             }
         }
@@ -66,30 +70,33 @@ void TrackerManager::receive_nr_files_to_process() {
 }
 
 void TrackerManager::receive_all_initial_files_data() {
+    int found_index, cur_index = 0;
+    file_data* cur_file;
+    swarm_data* sw;
+    int sender_rank;
+
     nr_files = 0;
     for (int i = 0; i < nr_initial_files; i++) {
-        MPI_Status status;
-        file_data temp_file;
-        MPI_Recv(&temp_file, sizeof(file_data), MPI_BYTE, MPI_ANY_SOURCE,
-                 MSG_INIT_FILES, MPI_COMM_WORLD, &status);
-        int sender_rank = status.MPI_SOURCE;
+        cur_file = &(swarms[cur_index].file_metadata);
 
-        cout << "[Tracker] Received file " << temp_file.filename 
+        MPI_Status status;
+        MPI_Recv(cur_file, sizeof(file_data), MPI_BYTE, MPI_ANY_SOURCE, MSG_INIT_FILES, MPI_COMM_WORLD, &status);
+        sender_rank = status.MPI_SOURCE;
+
+        cout << "[Tracker] Received file " << cur_file->filename 
              << " from peer " << sender_rank << endl;
 
-        // see if already known
-        int found_index = find_file_index(temp_file.filename);
+        // verificam daca fisierul nu exista si il adaugam in caz afirmativ
+        // daca nu exista mentinem indexul curent pt a fi suprascris data viitoare
+        found_index = find_file_index(cur_file->filename);
         if (found_index == NOT_FOUND) {
-            found_index = nr_files;
+            found_index = cur_index;
             nr_files++;
+            cur_index++;
         }
 
-        // copy the file metadata
-        swarms[found_index].file_metadata = temp_file;
-
-        // mark sender as seed
-        swarms[found_index].update.is_seed[sender_rank] = true;
-        swarms[found_index].update.is_peer[sender_rank] = false; // fully owns the file
+        sw = &(swarms[found_index]);
+        sw->owners.is_seed[sender_rank] = true; 
     }
 }
 
@@ -99,85 +106,84 @@ void TrackerManager::signal_clients_to_start() {
     }
 }
 
-// The main loop that processes messages from peers
+// loop-ul principal care asteapta mesaje de la clienti
 void tracker_main_loop(TrackerManager& tm) {
     int nr_done_clients = 0;
     bool finished = false;
 
     while (!finished) {
         MPI_Status status;
+        // asteapta orice mesaj de la orice sursa
         MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
         int tag = status.MPI_TAG;
         int source = status.MPI_SOURCE;
 
+        // actionam in functie de tag
         switch(tag) {
             case MSG_REQ_FULL_SWARM: {
                 char filename[MAX_FILENAME];
-                MPI_Recv(filename, MAX_FILENAME, MPI_CHAR, source, MSG_REQ_FULL_SWARM,
-                         MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Recv(filename, MAX_FILENAME, MPI_CHAR, source, MSG_REQ_FULL_SWARM, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
                 int idx = tm.find_file_index(filename);
                 if (idx == NOT_FOUND) {
-                    // consume message, do something, or create a placeholder
-                    swarm_data emptyData;
-                    memset(&emptyData, 0, sizeof(swarm_data));
-                    MPI_Send(&emptyData, sizeof(swarm_data), MPI_BYTE,
-                             source, MSG_SWARM_DATA, MPI_COMM_WORLD);
+                    // daca nu exista fisierul, trimitem un mesaj gol
+                    swarm_data empty;
+                    memset(&empty, 0, sizeof(swarm_data));
+                    MPI_Send(&empty, sizeof(swarm_data), MPI_BYTE, source, MSG_SWARM_DATA, MPI_COMM_WORLD);
                 } else {
-                    // mark sender as peer
-                    tm.swarms[idx].update.is_peer[source] = true;
-                    // send swarm data
-                    MPI_Send(&(tm.swarms[idx]), sizeof(swarm_data), MPI_BYTE,
-                             source, MSG_SWARM_DATA, MPI_COMM_WORLD);
+                    // altfel trimitem swarm-ul corespunzator (hash-uri, nr_chunks, cine are ce)
+                    MPI_Send(&(tm.swarms[idx]), sizeof(swarm_data), MPI_BYTE, source, MSG_SWARM_DATA, MPI_COMM_WORLD);
+
+                    // marcam sursa ca peer pentru acel fisier
+                    tm.swarms[idx].owners.is_peer[source] = true;
                 }
                 break;
             }
 
             case MSG_REQ_UPDATE_SWARM: {
                 char filename[MAX_FILENAME];
-                MPI_Recv(filename, MAX_FILENAME, MPI_CHAR, source, MSG_REQ_UPDATE_SWARM,
-                         MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Recv(filename, MAX_FILENAME, MPI_CHAR, source, MSG_REQ_UPDATE_SWARM, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
+                // cautam index-ul fisierului si trimitem update-ul corespunzator
                 int idx = tm.find_file_index(filename);
                 if (idx == NOT_FOUND) {
-                    // send back an empty swarm_update
-                    swarm_update emptyUpd;
-                    memset(&emptyUpd, 0, sizeof(swarm_update));
-                    MPI_Send(&emptyUpd, sizeof(swarm_update), MPI_BYTE,
-                             source, MSG_UPDATE_SWARM, MPI_COMM_WORLD);
+                    swarm_update empty;
+                    memset(&empty, 0, sizeof(swarm_update));
+                    MPI_Send(&empty, sizeof(swarm_update), MPI_BYTE, source, MSG_UPDATE_SWARM, MPI_COMM_WORLD);
                 } else {
-                    MPI_Send(&(tm.swarms[idx].update), sizeof(swarm_update), MPI_BYTE,
-                             source, MSG_UPDATE_SWARM, MPI_COMM_WORLD);
+                    MPI_Send(&(tm.swarms[idx].owners), sizeof(swarm_update), MPI_BYTE, source, MSG_UPDATE_SWARM, MPI_COMM_WORLD);
                 }
                 break;
             }
 
+            // un peer a terminat de descarcat un fisier
             case MSG_FILE_DONE: {
                 char filename[MAX_FILENAME];
-                MPI_Recv(filename, MAX_FILENAME, MPI_CHAR, source, MSG_FILE_DONE,
-                         MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Recv(filename, MAX_FILENAME, MPI_CHAR, source, MSG_FILE_DONE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
                 int idx = tm.find_file_index(filename);
                 if (idx != NOT_FOUND) {
-                    // mark source as seed for that file
-                    tm.swarms[idx].update.is_seed[source] = true;
-                    tm.swarms[idx].update.is_peer[source] = false;
+                    // il facem seed
+                    tm.swarms[idx].owners.is_seed[source] = true;
+                    tm.swarms[idx].owners.is_peer[source] = false;
                 }
                 break;
             }
 
+            // un peer a terminat toate descarcarile
             case MSG_ALL_DONE: {
                 MPI_Recv(nullptr, 0, MPI_CHAR, source, MSG_ALL_DONE, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                cout << "[Tracker] Peer " << source << " has finished all downloads.\n";
+                cout << "[Tracker] Peer " << source << " has finished all downloads ( " << nr_done_clients << " done so far)\n";
                 nr_done_clients++;
 
+                // daca toti au terminat trimitem mesaje de stop
                 if (nr_done_clients == (tm.numtasks - 1)) {
-                    // all done
                     cout << "[Tracker] All peers done. Stopping...\n";
-                    // send MSG_TRACKER_STOP to all
-                    for (int r = 1; r < tm.numtasks; r++) {
-                        MPI_Send(nullptr, 0, MPI_CHAR, r, MSG_TRACKER_STOP, MPI_COMM_WORLD);
+                    for (int rank = 1; rank < tm.numtasks; rank++) {
+                        MPI_Send(nullptr, 0, MPI_CHAR, rank, MSG_TRACKER_STOP, MPI_COMM_WORLD);
+                        cout << "[Tracker] Sent stop signal to peer " << rank << endl;
+                        sleep(0.1);
                     }
                     finished = true;
                 }
@@ -185,10 +191,8 @@ void tracker_main_loop(TrackerManager& tm) {
             }
 
             default: {
-                // unknown message → must consume it
                 MPI_Recv(nullptr, 0, MPI_CHAR, source, tag, MPI_COMM_WORLD, &status);
-                cerr << "[Tracker] Unknown tag " << tag 
-                     << " from peer " << source << endl;
+                cerr << "[Tracker] Unknown tag " << tag << " from peer " << source << endl;
                 break;
             }
         }
@@ -196,29 +200,25 @@ void tracker_main_loop(TrackerManager& tm) {
 }
 
 void tracker(int numtasks, int rank) {
-    cout << "[Tracker] Starting at rank " << rank << endl;
-
     TrackerManager tm(numtasks);
 
-    // 1. gather how many owned files from each peer
+    // afla cate fisiere vor fi procesate
     tm.receive_nr_files_to_process();
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // 2. gather metadata of those files
+    // primeste datele initiale despre fisiere
     tm.receive_all_initial_files_data();
     MPI_Barrier(MPI_COMM_WORLD);
 
     // optional: a small debug
+    sleep(1);
     tm.DEBUG_PRINT();
 
-    // 3. give them the green light
-    sleep(0.8);
+    // semnaleaza clientilor sa inceapa
     tm.signal_clients_to_start();
 
-    // 4. main loop
+    // logica principala (swarm-uri si update-uri)
     tracker_main_loop(tm);
 
     cout << "[Tracker] Exiting now.\n";
 }
-
-

@@ -1,15 +1,6 @@
 #pragma once
 
-#include <vector>
-#include "struct.h"
-
 using namespace std;
-
-struct peer_file_data {
-    file_data file;
-    int nr_owned_chunks;
-    bool has_chunk[MAX_CHUNKS]; // true if the peer owns chunk i
-};
 
 struct chunk_request {
     char filename[MAX_FILENAME];
@@ -25,34 +16,33 @@ class PeerManager {
 public:
     int rank;
     int numtasks;
-    int nr_files;
+    int nr_files; // nr total file-uri, detinute + dorite
     int nr_owned_files;
 
-    // local array of files
-    peer_file_data peer_files[MAX_FILES];
+    // datele despre fisierele detinute si dorite
+    file_data files[MAX_FILES];
+    int nr_owned_chunks[MAX_FILES];
     
-    // For the file currently being downloaded
+    // Swarm-ul cerut de la tracker
     swarm_data cur_swarm; 
 
     PeerManager(int rank, int numtasks);
 
     void read_input_file();
 
-    // initialization calls
+    // functii de initializare
     void send_my_nr_files();
     void send_own_files_data();
 
-    // main ops
-    void update_swarm();
+    void update_swarm(char* filename);
     bool request_chunk(int rank_request, int file_index, int chunk_index);
-    void send_chunk();
+    void send_chunk(int rank_request);
     void download_file_using_swarm(int file_index);
     void save_output_file(int index);
 
     void DEBUG_PRINT();
 };
 
-// threads
 void* download_thread_func(void* arg);
 void* upload_thread_func(void* arg);
 

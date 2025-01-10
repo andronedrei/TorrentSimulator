@@ -2,13 +2,12 @@
 
 #include "struct.h"
 
-#define NOT_FOUND -1
 
 class TrackerManager {
 public:
     int numtasks;
-    int nr_files;            // how many distinct files exist across all seeds
-    int nr_initial_files;    // how many total "owned files" across all peers
+    int nr_files;            // cate fisiere exista in total
+    int nr_initial_files;    // cate fisiere vor fi procesate initial (pot exista dubluri)
     swarm_data swarms[MAX_FILES]; 
 
     TrackerManager(int numtasks);
@@ -16,6 +15,7 @@ public:
     int find_file_index(const char* filename);
     void DEBUG_PRINT();
 
+    // functii de initializare
     void receive_nr_files_to_process();
     void receive_all_initial_files_data();
     void signal_clients_to_start();

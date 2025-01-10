@@ -7,8 +7,7 @@
 #define HASH_SIZE 32
 #define MAX_CHUNKS 100
 
-// We assume ranks go from 0..N-1
-// Let's allow up to 11 clients (rank 1..10)
+// 10 clienti maxim, dar numeratom 1 .. 10 fara 0
 #define MAX_CLIENTS 11
 
 // tag-uri initializare metadate
@@ -20,7 +19,6 @@
 #define MSG_REQ_FULL_SWARM    20001
 #define MSG_REQ_UPDATE_SWARM  20002
 #define MSG_SWARM_DATA        20003
-// CORRECTED from 2004 -> 20004
 #define MSG_UPDATE_SWARM      20004
 
 #define MSG_CHUNK_REQUEST     20005
@@ -29,7 +27,9 @@
 #define MSG_ALL_DONE          20008
 #define MSG_TRACKER_STOP      20009
 
-// Data structures
+#define NOT_FOUND -1
+
+// structuri date comune folosite in comunicatie
 struct identifier {
     char hash[HASH_SIZE];
 };
@@ -46,6 +46,6 @@ struct swarm_update {
 };
 
 struct swarm_data {
-    swarm_update update;
+    swarm_update owners;
     file_data file_metadata;
 };
